@@ -47,9 +47,10 @@ namespace gif {
 
         return file->iPos;
     }
+    #define BRIGHT_SHIFT 2
 
     void draw(GIFDRAW* p_draw) {
-        uint8_t *s;
+       /* uint8_t *s;
         int x, y, iWidth;
         static uint8_t ucPalette[256]; // thresholded palette
 
@@ -85,16 +86,100 @@ namespace gif {
             for (x = 0; x < iWidth; x++) {
                 c = *s++;
                 if (c != ucTransparent)
-                    display.drawPixel(p_draw->iX + x, y, ucPalette[c] ? SSD1306_WHITE : SSD1306_BLACK);
+                    display.drawPixel(p_draw->iX + x, y, ucPalette[c] ? WHITE_COLOR : BLACK_COLOR);
             }
         } else {
             s = p_draw->pPixels;
             // Translate the 8-bit pixels through the RGB565 palette (already byte reversed)
             for (x = 0; x < p_draw->iWidth; x++)
-                display.drawPixel(p_draw->iX + x, y, ucPalette[*s++] ? SSD1306_WHITE : SSD1306_BLACK);
+                display.drawPixel(p_draw->iX + x, y, ucPalette[*s++] ? WHITE_COLOR : BLACK_COLOR);
         }
         if (p_draw->y == p_draw->iHeight - 1) // last line, render it to the display
-            display.display();
+            display.showBuffer(); */
+
+        uint8_t *s;
+        uint16_t *d, *usPalette, usTemp[320];
+        int x, y, iWidth;
+
+        usPalette = p_draw->pPalette;
+        y = p_draw->iY + p_draw->y; // current line
+
+        s = p_draw->pPixels;
+        if (p_draw->ucDisposalMethod == 2) // restore to background color
+        {
+          for (x = 0; x < iWidth; x++)
+          {
+            if (s[x] == p_draw->ucTransparent)
+              s[x] = p_draw->ucBackground;
+          }
+          p_draw->ucHasTransparency = 0;
+        }
+        // Apply the new pixels to the main image
+        if (p_draw->ucHasTransparency) // if transparency used
+        {
+          uint8_t *pEnd, c, ucTransparent = p_draw->ucTransparent;
+          int x, iCount;
+          pEnd = s + p_draw->iWidth;
+          x = 0;
+          iCount = 0; // count non-transparent pixels
+          while (x < p_draw->iWidth)
+          {
+            c = ucTransparent - 1;
+            d = usTemp;
+            while (c != ucTransparent && s < pEnd)
+            {
+              c = *s++;
+              if (c == ucTransparent) // done, stop
+              {
+                s--; // back up to treat it like transparent
+              }
+              else // opaque
+              {
+                *d++ = usPalette[c];
+                iCount++;
+              }
+            }           // while looking for opaque pixels
+            if (iCount) // any opaque pixels?
+            {
+              for (int xOffset = 0; xOffset < iCount; xOffset++)
+              {
+                display.drawPixel(x + xOffset, y, usTemp[xOffset]);
+              }
+              x += iCount;
+              iCount = 0;
+            }
+            // no, look for a run of transparent pixels
+            c = ucTransparent;
+            while (c == ucTransparent && s < pEnd)
+            {
+              c = *s++;
+              if (c == ucTransparent)
+                iCount++;
+              else
+                s--;
+            }
+            if (iCount)
+            {
+              x += iCount; // skip these
+              iCount = 0;
+            }
+          }
+        }
+        else
+        {
+          s = p_draw->pPixels;
+          // Translate the 8-bit pixels through the RGB565 palette (already byte reversed)
+          for (x = 0; x < p_draw->iWidth; x++)
+          {
+            display.drawPixel(x, y, usPalette[*s++]);
+          }
+        }
+
+        if(p_draw->y == p_draw->iHeight - 1)
+        {
+            display.showBuffer();
+            display.fillScreen(BLACK_COLOR);
+        }
     }
 
     int draw_next_frame() {

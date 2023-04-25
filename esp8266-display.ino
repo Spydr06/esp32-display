@@ -30,12 +30,14 @@ void setup()
     Serial.begin(115200);
     Serial.println();
 
-    if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("SSD1306 allocation failed"));
-        delay(2000);
-        ESP.restart();        
-    }
-    display.clearDisplay();
+    display.begin(16);
+    display.flushDisplay();
+    display.setTextWrap(false);
+    display.setBrightness(255);
+
+#ifdef ESP8266
+    display_ticker.attach(0.004, display_updater);
+#endif
 
     log("connecting...");
 
@@ -68,7 +70,8 @@ void setup()
     ntp::client.begin();
     ntp::client.setTimeOffset(ntp::time_offset);
 
-    display.display();
+    gif::gif.begin(LITTLE_ENDIAN_PIXELS);
+
     delay(2000);
 
     display.clearDisplay();
@@ -84,9 +87,10 @@ void log(const char* msg)
 {
     Serial.println(msg);
 
-    display.setTextColor(SSD1306_WHITE);
+    display.setTextColor(WHITE_COLOR);
     display.println(msg);
-    display.display();
+    display.showBuffer();
+    display.fillScreen(BLACK_COLOR);
 }
 
 void home_page()
