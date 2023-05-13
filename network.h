@@ -1,10 +1,10 @@
 #pragma once
 
 namespace network {
-    const char* ssid PROGMEM = "Keller";
-    const char* password PROGMEM = "?Es1tlubHiJb!";
+    const char* ssid = "Keller";
+    const char* password = "?Es1tlubHiJb!";
 
-    const char* server_name PROGMEM = "esp-display"; // access http://esp-display in browser
+    const char* server_name = "esp-display"; // access http://esp-display in browser
 }
 
 #include <WiFiUdp.h>

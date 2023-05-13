@@ -1,51 +1,47 @@
-#ifdef ESP8266
-    #include <Arduino.h>
-    #include <SPI.h>
-    #include <ESP8266WiFi.h>
-    #include <ESP8266WiFiMulti.h>
-    #include <ESP8266WebServer.h>
-    #include <ESP8266mDNS.h>
-    #include <LittleFS.h>
+#if defined(ESP32)
+    #include <WiFi.h>        
+    #include <WiFiMulti.h>
+    #include <ESP32WebServer.h>
+    #include <ESPmDNS.h>
+    #include <SPIFFS.h>
 
-    #if !defined(F_CPU) || F_CPU != 160000000
-        #error "esp8266 must run on 160 MHz"
-    #endif
+    #define FS SPIFFS
+    #define FS_Init() (SPIFFS.begin(true))
 
-    ESP8266WebServer server(80);
+    ESP32WebServer server(80);
 #else
-    #error "cpu must be esp8266"
+    #error "only support esp32 and esp8266"
 #endif
 
 void log(const char* msg);
 
+#include "display.h"
 #include "network.h"
 #include "html.h"
-#include "screen.h"
+#include "overlay.h"
 #include "gif.h"
+#include "bitmap.h"
+#include "state.h"
 
-void setup()
-{
-    pinMode(LED_BUILTIN, OUTPUT);
-    
+void setup(void)
+{    
     Serial.begin(115200);
     Serial.println();
 
-    display.begin(16);
-    display.flushDisplay();
-    display.setTextWrap(false);
-    display.setBrightness(255);
+    display::init();
 
-#ifdef ESP8266
-    display_ticker.attach(0.004, display_updater);
-#endif
-
-    log("connecting...");
-
+    state::set(state::CONNECTING);
+    Serial.println(">> BEFORE WIFI <<");
+    
     WiFi.begin(network::ssid, network::password);
+    WiFi.mode(WIFI_MODE_STA);
 
+    Serial.println(">> AFTER WIFI <<");
     while(WiFi.status() != WL_CONNECTED)
         delay(10);
-    log(("\nconnected to " + WiFi.SSID() + "\n(ip): " + WiFi.localIP().toString()).c_str());
+
+    Serial.println(("\nconnected to " + WiFi.SSID() + "\n(ip): " + WiFi.localIP().toString()).c_str());
+    log(WiFi.localIP().toString().c_str());
 
     if(!MDNS.begin(network::server_name))
     {
@@ -54,7 +50,7 @@ void setup()
         ESP.restart();
     }
 
-    if(!LittleFS.begin())
+    if(!FS_Init())
     {
         log("error mounting internal flash fs");
         delay(2000);
@@ -74,23 +70,23 @@ void setup()
 
     delay(2000);
 
-    display.clearDisplay();
+    display::dma->clearScreen();
 }
 
-void loop()
+void loop(void)
 {
-    server.handleClient();    
-    gif::draw_next_frame();
+    server.handleClient();  
+    gif::draw_next_frame();         
 }
 
 void log(const char* msg)
 {
     Serial.println(msg);
 
-    display.setTextColor(WHITE_COLOR);
-    display.println(msg);
-    display.showBuffer();
-    display.fillScreen(BLACK_COLOR);
+    display::dma->setBrightness(OVERLAY_BRIGHTNESS);
+    display::dma->fillScreen(display::BLACK);
+    display::dma->setTextColor(display::WHITE);
+    display::dma->println(msg);
 }
 
 void home_page()
@@ -123,8 +119,8 @@ void handle_file_upload()
         
     switch(upload_file.status) {
     case UPLOAD_FILE_START: {
-        LittleFS.remove(gif::filename);
-        dest_file = LittleFS.open(gif::filename, "w");       
+        FS.remove(gif::filename);
+        dest_file = FS.open(gif::filename, "w");       
     } break;
     case UPLOAD_FILE_WRITE:
         if(dest_file)
