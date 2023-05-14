@@ -18,12 +18,7 @@ namespace bitmap {
         display::dma->drawBitmap(x, y, bitmap->data, bitmap->width, bitmap->height, color);
     }
 
-    const Bitmap CONNECTING = (Bitmap){
-        .width = 8,
-        .height = 2,
-        .data = (uint8_t[]){
-            0b11011011,
-            0b11011011
-        }
-    };
+    void show_bitmap(uint8_t x, uint8_t y, const Bitmap* bitmap, int16_t color) {
+        display::dma->drawBitmap(x, y, bitmap->data, bitmap->width, bitmap->height, color);
+    }
 }

@@ -2,9 +2,6 @@
 
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 
-#define GIF_BRIGHTNESS 150
-#define OVERLAY_BRIGHTNESS 100
-
 #define PANEL_RES_X 64
 #define PANEL_RES_Y 32
 #define PANEL_CHAIN 1
@@ -22,6 +19,7 @@ namespace display {
 
     const uint16_t WHITE = dma->color565(255, 255, 255);
     const uint16_t BLACK = dma->color565(0, 0, 0);
+    const uint16_t RED = dma->color565(255, 100, 100);
 
     void init(void) {
         HUB75_I2S_CFG mx_config(
