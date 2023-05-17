@@ -84,4 +84,4 @@ const Bitmap_T STATE_ICONS[] = {
     }
 };
 
-#endif
+#endif /* ESP32_DISPLAY_BITMAPS_H */

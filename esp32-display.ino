@@ -6,8 +6,15 @@
 #include <WiFiMulti.h>
 #include <WiFiUdp.h>
 #include <EEPROM.h>
+#include <algorithm>
+
+#include "fonts/dogica4pt7b.h"
+#define FONT dogica4pt7b
+
+#include "version.h"
 
 #define STRINGIFY(arg) #arg
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define PANEL_RES_X 64
 #define PANEL_RES_Y 32
@@ -18,7 +25,6 @@
     #include <ESP32WebServer.h>
     #include <ESPmDNS.h>
     #include <SPIFFS.h>
-   // #include <Preferences.h>
 
     #define PANEL_PIN_A 18
     #define PANEL_PIN_R1 23
@@ -34,6 +40,8 @@
     #error "only support esp32"
 #endif
 
+#define OPENWEATHERMAP_API_KEY_LENGTH 32
+
 typedef struct
 {
     // clock settings
@@ -42,15 +50,20 @@ typedef struct
     uint8_t c_pos_y;
     uint16_t c_hour_col;
     uint16_t c_minute_col;
+    uint8_t c_spacing;
 
     // clock separator settings
     bool sep_enabled;
-    bool sep_blinking;
+    uint16_t sep_blink_interval;
     uint16_t sep_color;
     char sep_char;
 
     // networking settings
     int32_t utc_time_offset;
+
+    // weather settings
+    bool w_enabled;
+    char w_api_key[OPENWEATHERMAP_API_KEY_LENGTH + 1];
 } Prefs_T;
 
 #define EEPROM_SIZE (sizeof(Prefs_T))
@@ -225,6 +238,7 @@ void display_init(void)
     display->setBrightness(255);
     display->clearScreen();
     display->setLatBlanking(2);
+    display->setFont(&FONT);
 }
 
 /*
@@ -249,11 +263,14 @@ void prefs_reset(void)
     prefs.c_pos_y = 2;
     prefs.c_hour_col = WHITE;
     prefs.c_minute_col = WHITE;
+    prefs.c_spacing = 6;
     prefs.sep_enabled = true;
-    prefs.sep_blinking = true;
+    prefs.sep_blink_interval = 1000;
     prefs.sep_color = WHITE;
     prefs.sep_char = ':';
     prefs.utc_time_offset = 7200;
+    prefs.w_enabled = true;
+    memset(prefs.w_api_key, '\0', sizeof(prefs.w_api_key));
 
     ntp_client.setTimeOffset(prefs.utc_time_offset);
     ntp_client.update();
@@ -286,13 +303,13 @@ void prefs_page(void)
 
     if (!prefs.c_enabled)
     {
-        html_page += F("<input type='checkbox' class='pref' id='show-clock' name='show-clock'/><br/><br/>");
+        html_page += F("<input type='checkbox' id='show-clock' name='show-clock'/><br/><br/>");
         goto end_clock_config;
     }
 
-    html_page += F(R"raw(<input type='checkbox' class='pref' id='show-clock' name='show-clock' checked/><br/><br/>
+    html_page += F(R"raw(<input type='checkbox' id='show-clock' name='show-clock' checked/><br/><br/>
 <label for='utc-time-offset'>UTC Time Offset: (timezone in seconds from GMT)</label>
-<input type='number' class='pref' min='-43200' max='43200' id='utc-time-offset' name='utc-time-offset' value=')raw");
+<input type='number' min='-43200' max='43200' id='utc-time-offset' name='utc-time-offset' value=')raw");
 
     html_page += prefs.utc_time_offset;
 
@@ -304,7 +321,7 @@ void prefs_page(void)
     html_page += prefs.c_pos_y;
     html_page += F(R"raw('/><br/><br/>
 <label for='c_hour_col'>Hour Color:</label>
-<input type='color' class='pref' id='c_hour_col' name='c_hour_col' value='#)raw");
+<input type='color' id='c_hour_col' name='c_hour_col' value='#)raw");
 
     char hex_str[7];
     color565_to_str(hex_str, prefs.c_hour_col);
@@ -312,41 +329,63 @@ void prefs_page(void)
 
     html_page += F(R"raw('/><br/><br/>
 <label for='c_minute_col'>Minute Color:</label>
-<input type='color' class='pref' id='c_minute_col' name='c_minute_col' value='#)raw");
+<input type='color' id='c_minute_col' name='c_minute_col' value='#)raw");
 
     color565_to_str(hex_str, prefs.c_minute_col);
     html_page += hex_str;
 
     html_page += F(R"raw('/><br/><br/>
+<label for='c_spacing'>Spacing:</label>
+<input type='number' id='c_spacing' name='c_spacing' min='0' max=')raw" STRINGIFY(UINT8_MAX) "' value='");
+    html_page += prefs.c_spacing;
+    html_page += F(R"raw('/><br/>
 <h4>Separator:</h4>
 <label for='sep_enabled'>Show Separator:</label>)raw");
 
     if (!prefs.sep_enabled)
     {
-        html_page += F("<input type='checkbox' class='pref' id='sep_enabled' name='sep_enabled'/><br/><br/>");
+        html_page += F("<input type='checkbox' id='sep_enabled' name='sep_enabled'/><br/><br/>");
         goto end_clock_config;
     }
 
-    html_page += F(R"raw(<input type='checkbox' checked class='pref' id='sep_enabled' name='sep_enabled'/><br/><br/>
-<label for='blink'>Blink:</label>
-<input type='checkbox' class='pref' id='blink' name='blink' )raw");
-    html_page += prefs.sep_blinking ? F("checked") : F("");
+    html_page += F(R"raw(<input type='checkbox' checked id='sep_enabled' name='sep_enabled'/><br/><br/>
+<label for='sep_blink_interval'>Blink Interval: (in ms, `0` means off)</label>
+<input type='number' id='sep_blink_interval' name='sep_blink_interval' min='0' max=')raw" STRINGIFY(UINT16_MAX) "' value='");
+    html_page += prefs.sep_blink_interval;
     html_page += F(R"raw('/><br/><br/>
 <label for='sep_color'>Color:</label>
-<input type='color' class='pref' id='sep_color' name='sep_color' value='#)raw");
+<input type='color' id='sep_color' name='sep_color' value='#)raw");
 
     color565_to_str(hex_str, prefs.sep_color);
     html_page += hex_str;
 
     html_page += F(R"raw('/><br/><br/>
 <label for='sep_char'>Character:</label>
-<input type='text' minlength='1' maxlength='1' class='pref' id='sep_char' name='sep_char' value=')raw");
+<input type='text' minlength='1' maxlength='1' id='sep_char' name='sep_char' value=')raw");
 
     html_page += prefs.sep_char;
-    html_page += F("'/><br/><br/>");
+    html_page += F("'/><br/>");
 
 end_clock_config:
-    html_page += F("<button class='pref' type='submit'>Update Settings</button></form></br>");
+
+    html_page += F(R"raw(<h3>Weather Configuration</h3>
+<label for='w_enabled'>Show Weather:</label>)raw");
+
+
+    if(!prefs.w_enabled)
+    {
+        html_page += F("<input type='checkbox' id='w_enabled' name='w_enabled'/><br/><br/>");
+        goto end_weather_config;
+    }
+
+    html_page += F(R"raw(<input type='checkbox' id='w_enabled' name='w_enabled' checked/><br/><br/>
+<label for='e_api_key'><a href='https://openweathermap.org'>openweathermap.org</a> API Key</label>
+<input type='text' minlength='0' maxlength=')raw" STRINGIFY(OPENWEATHERMAP_API_KEY_LENGTH) "' value='");
+    html_page += prefs.w_api_key;
+    html_page += F("'/><br></br>");
+
+end_weather_config:
+    html_page += F("<button type='submit'>Update Settings</button></form></br>");
 }
 
 void pref_update(String item, String value)
@@ -359,7 +398,7 @@ void pref_update(String item, String value)
         prefs.c_enabled = true;
     else if(item == "utc-time-offset")
     {
-        prefs.utc_time_offset = item.toInt();
+        prefs.utc_time_offset = value.toInt();
         ntp_client.setTimeOffset(prefs.utc_time_offset);
         ntp_client.update();
     }
@@ -371,14 +410,20 @@ void pref_update(String item, String value)
         prefs.c_hour_col = str_to_color565(value.c_str());
     else if(item == "c_minute_col")
         prefs.c_minute_col = str_to_color565(value.c_str());
+    else if(item == "c_spacing")
+        prefs.c_spacing = value.toInt();
     else if(item == "sep_enabled")
         prefs.sep_enabled = true;
     else if(item == "sep_color")
         prefs.sep_color = str_to_color565(value.c_str());
     else if(item == "sep_char")
         prefs.sep_char = value.charAt(0);
-    else if(item == "blink")
-        prefs.sep_blinking = true;
+    else if(item == "sep_blink_interval")
+        prefs.sep_blink_interval = value.toInt();
+    else if(item == "w_enabled")
+        prefs.w_enabled = true;
+    else if(item == "w_api_key")
+        memcpy(prefs.w_api_key, value.c_str(), MIN(value.length(), OPENWEATHERMAP_API_KEY_LENGTH));
     else
     {
         html_page += F("<label>Unknown setting \"");
@@ -413,15 +458,21 @@ void show_bitmap(uint8_t x, uint8_t y, const Bitmap_T *bitmap, int16_t color)
 
 inline void overlay_clock(uint16_t x, uint16_t y)
 {
-    if (prefs.sep_enabled &&
-        (!prefs.sep_blinking ||
-         prefs.sep_blinking && millis() % 1000 < 500))
-        display->drawChar(x + 10, y, prefs.sep_char,
-                          prefs.sep_color, BLACK, 1);
-    display->drawChar(x + 0, y, hour[0], prefs.c_hour_col, BLACK, 1);
-    display->drawChar(x + 6, y, hour[1], prefs.c_hour_col, BLACK, 1);
-    display->drawChar(x + 14, y, minute[0], prefs.c_minute_col, BLACK, 1);
-    display->drawChar(x + 20, y, minute[1], prefs.c_minute_col, BLACK, 1);
+    uint16_t iv = prefs.sep_blink_interval;
+    uint8_t sp = prefs.c_spacing; 
+
+    display->drawChar(x, y, hour[0], prefs.c_hour_col, BLACK, 1);
+    display->drawChar(x += sp,      y, hour[1], prefs.c_hour_col, BLACK, 1);
+
+    if (prefs.sep_enabled)
+    {
+        x += sp;
+        if(!iv || iv && millis() % iv < iv >> 1)
+            display->drawChar(x, y, prefs.sep_char, prefs.sep_color, BLACK, 1);
+    }
+
+    display->drawChar(x += sp,  y, minute[0], prefs.c_minute_col, BLACK, 1);
+    display->drawChar(x += sp, y, minute[1], prefs.c_minute_col, BLACK, 1);
 }
 
 void draw_overlay()
@@ -489,6 +540,9 @@ void gif_draw(GIFDRAW *pDraw)
     usPalette = pDraw->pPalette;
     y = pDraw->iY + pDraw->y; // current line
     s = pDraw->pPixels;
+
+    if (pDraw->y == pDraw->iHeight - 1)
+        draw_overlay();
 
     // restore to background color
     if (pDraw->ucDisposalMethod == 2)
@@ -636,8 +690,8 @@ void home_page(void)
 <a href='/reset'><button>Reset</button></a><br/>
 <h3>Select GIF</h3>
 <form action='/fupload' method='post' enctype='multipart/form-data'>
-<input class='buttons' type='file' name='fupload' id='fupload' value=''/>
-<button class='buttons' type='submit'>Upload GIF</button><br/>
+<input type='file' name='fupload' id='fupload' value=''/>
+<button type='submit'>Upload GIF</button><br/>
 </form>)raw");
 
     send_header();
@@ -651,7 +705,7 @@ void home_page(void)
 void report_could_not_create_file(const char *target)
 {
     send_header();
-    html_page += F("<h3>Error creating uploaded file. Make sure the file is not bigger than 3Mb!</h3>");
+    html_page += F("<h3>Error creating uploaded file. Make sure the file is not bigger than 3Mb and ends in `.gif`!</h3>");
     html_page += F("<a href='/");
     html_page += target;
     html_page += F("'>[Back]</a><br/>");
@@ -669,7 +723,7 @@ void handle_pref_update(void) {
     // TODO: find better way to post disabled checkboxes
     prefs.c_enabled = false;
     prefs.sep_enabled = false;
-    prefs.sep_blinking = false;
+    prefs.w_enabled = false;
 
     for(int i = 0; i < server.args(); i++)
         pref_update(server.argName(i), server.arg(i));
@@ -685,7 +739,7 @@ void handle_file_upload(void)
 {
     static File dest_file;
     HTTPUpload &upload_file = server.upload();
-    if (upload_file.name.length() == 0)
+    if (!upload_file.filename.endsWith(".gif"))
     {
         report_could_not_create_file("upload");
         return;

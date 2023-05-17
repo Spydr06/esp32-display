@@ -8,11 +8,11 @@
     "buildPreferences": [
         [
             "build.extra_flags",
-            "-Wall -Wextra -O3 -DESP32=1"
+            "-Wall -Wextra -Os -DESP32=1"
         ],
         [
             "compiler.cpp.extra_flags",
-            "-O3 -mtarget-align"
+            "-Os -mtarget-align"
         ]
     ]
 }
