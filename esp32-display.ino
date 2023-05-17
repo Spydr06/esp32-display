@@ -89,7 +89,7 @@ void show_bitmap_centered(const Bitmap_T *bitmap, int16_t color);
 enum State
 {
     STATE_CONNECTING,
-    STATE_CONNECTED
+    STATE_UPDATING,
 };
 
 void log(const char *msg, bool is_err);
@@ -116,7 +116,9 @@ const char *WEATHER_SERVER PROGMEM = "api.openweathermap.org";
 
 const uint16_t WHITE = display->color565(255, 255, 255);
 const uint16_t BLACK = display->color565(0, 0, 0);
-const uint16_t RED = display->color565(255, 100, 100);
+const uint16_t ERROR = display->color565(255, 100, 100);
+const uint16_t WARN  = display->color565(246, 211, 45);
+const uint16_t CRITICAL = display->color565(255,130,67);
 
 const char *WIFI_SSID = "Keller";
 const char *WIFI_PASSWD = "?Es1tlubHiJb!";
@@ -124,6 +126,8 @@ const char *SERVER_NAME = "esp-display"; // access http://esp-display in browser
 
 const char *HTML_PAGE_HEADER PROGMEM = "<!DOCTYPE html><html><head><title>ESP Display</title></head><body>";
 const char *HTML_PAGE_FOOTER PROGMEM = "</body></html>";
+
+uint32_t SKETCH_SIZE;
 
 String html_page;
 
@@ -138,15 +142,17 @@ char minute[3] = "--";
 
 #include "bitmaps.h"
 
-inline void set_state(State state)
+inline void set_state(State state, uint16_t color)
 {
-    show_bitmap_centered(&STATE_ICONS[state], WHITE);
+    show_bitmap_centered(&STATE_ICONS[state], color);
 }
 
 void setup(void)
 {
     Serial.begin(115200);
     Serial.println();
+
+    SKETCH_SIZE = ESP.getSketchSize();
 
     if (!EEPROM.begin(EEPROM_SIZE))
     {
@@ -158,7 +164,7 @@ void setup(void)
     prefs_load();
     display_init();
 
-    set_state(STATE_CONNECTING);
+    set_state(STATE_CONNECTING, WHITE);
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWD);
     WiFi.mode(WIFI_MODE_STA);
@@ -222,7 +228,7 @@ void log(const char *msg, bool is_err)
 {
     Serial.println(msg);
 
-    display->setTextColor(is_err ? RED : WHITE);
+    display->setTextColor(is_err ? ERROR : WHITE);
     display->println(msg);
 }
 
@@ -878,6 +884,14 @@ void handle_file_upload(void)
     }
 }
 
+void progress_bar(int64_t done, int64_t total, uint16_t color) {
+    double percentage = (double) done / (double) total;
+    uint8_t num_pixels = (int) (percentage * (double) PANEL_RES_X);
+
+    display->drawFastHLine(0, 30, num_pixels, color);
+    display->drawFastHLine(0, 29, num_pixels, color);
+}
+
 void handle_ota_update(void)
 {
     HTTPUpload& upload_file = server.upload();
@@ -891,6 +905,8 @@ void handle_ota_update(void)
     {
     case UPLOAD_FILE_START:
         Serial.printf("Update: %s\n", upload_file.filename.c_str());
+        set_state(STATE_UPDATING, WARN);
+
         if(!Update.begin(UPDATE_SIZE_UNKNOWN))
         {
             Update.printError(Serial);
@@ -904,6 +920,7 @@ void handle_ota_update(void)
             Update.printError(Serial);
             report_file_upload_error(upload_file.filename, Update.errorString());
         }
+        progress_bar(upload_file.totalSize, SKETCH_SIZE, CRITICAL);
         break;
     case UPLOAD_FILE_END:
         if(Update.end(true))
@@ -919,6 +936,8 @@ void handle_ota_update(void)
             html_page += F("<a href='/'>[Back]</a><label>.</label><br/>");
             html_page += HTML_PAGE_FOOTER;
             server.send(200, "text/html", html_page);
+
+            display->clearScreen();
 
             delay(2000);
         }
