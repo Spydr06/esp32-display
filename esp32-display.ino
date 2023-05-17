@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WiFiUdp.h>
+#include <EEPROM.h>
 
 #define STRINGIFY(arg) #arg
 
@@ -17,7 +18,7 @@
     #include <ESP32WebServer.h>
     #include <ESPmDNS.h>
     #include <SPIFFS.h>
-    #include <Preferences.h>
+   // #include <Preferences.h>
 
     #define PANEL_PIN_A 18
     #define PANEL_PIN_R1 23
@@ -29,13 +30,9 @@
 
     ESP32WebServer server(80);
     MatrixPanel_I2S_DMA *display = NULL;
-    Preferences non_volatile_prefs;
 #else
     #error "only support esp32"
 #endif
-
-#define load_pref(name, default, type) prefs.name = non_volatile_prefs.get##type(#name, default)
-#define save_pref(name, type)          non_volatile_prefs.put##type(#name, prefs.name)
 
 typedef struct
 {
@@ -55,6 +52,8 @@ typedef struct
     // networking settings
     int32_t utc_time_offset;
 } Prefs_T;
+
+#define EEPROM_SIZE (sizeof(Prefs_T))
 
 void prefs_load(void);
 
@@ -125,6 +124,13 @@ void setup(void)
     Serial.begin(115200);
     Serial.println();
 
+    if (!EEPROM.begin(EEPROM_SIZE))
+    {
+        Serial.println("error mounting eeprom");
+        delay(2000);
+        ESP.restart();
+    }
+
     prefs_load();
     display_init();
 
@@ -136,9 +142,7 @@ void setup(void)
     while (WiFi.status() != WL_CONNECTED)
         delay(10);
 
-    Serial.println(
-        ("\nconnected to " + WiFi.SSID() + "\n(ip): " + WiFi.localIP().toString())
-            .c_str());
+    Serial.println(("\nconnected to " + WiFi.SSID() + "\n(ip): " + WiFi.localIP().toString()).c_str());
     log(WiFi.localIP().toString().c_str(), false);
 
     if (!MDNS.begin(SERVER_NAME))
@@ -155,12 +159,12 @@ void setup(void)
         ESP.restart();
     }
 
-    if (!non_volatile_prefs.begin("esp32-display", false))
-    {
-        log("error loading preferences", true);
-        delay(2000);
-        ESP.restart();
-    }
+   // if (!non_volatile_prefs.begin("esp32-display", false))
+   // {
+   //     log("error loading preferences", true);
+   //     delay(2000);
+   //     ESP.restart();
+   // }
 
     server.on("/", home_page);
     server.on("/fupload", HTTP_POST, [](){ server.send(200); }, handle_file_upload);
@@ -229,36 +233,31 @@ void display_init(void)
 
 void prefs_load(void)
 { 
-    load_pref(c_enabled, true, Bool);
-    load_pref(c_pos_x, 2, UChar);
-    load_pref(c_pos_y, 2, UChar);
-    load_pref(c_hour_col, WHITE, UShort);
-    load_pref(c_minute_col, WHITE, UShort);
-    load_pref(sep_enabled, true, Bool);
-    load_pref(sep_blinking, true, Bool);
-    load_pref(sep_color, WHITE, UShort);
-    load_pref(sep_char, ':', Char);
-    load_pref(utc_time_offset, 7200, Int);
+    EEPROM.get(0, prefs);
 }
 
 void prefs_save(void)
 {
-    save_pref(c_enabled, Bool);
-    save_pref(c_pos_x, UChar);
-    save_pref(c_pos_y, UChar);
-    save_pref(c_hour_col, UShort);
-    save_pref(c_minute_col, UShort);
-    save_pref(sep_enabled, Bool);
-    save_pref(sep_blinking, Bool);
-    save_pref(sep_color, UShort);
-    save_pref(sep_char, Char);
-    save_pref(utc_time_offset, Int);
+    EEPROM.put(0, prefs);
+    EEPROM.commit();
 }
 
 void prefs_reset(void)
 {
-    non_volatile_prefs.clear();
-    prefs_load();
+    prefs.c_enabled = true;
+    prefs.c_pos_x = 2;
+    prefs.c_pos_y = 2;
+    prefs.c_hour_col = WHITE;
+    prefs.c_minute_col = WHITE;
+    prefs.sep_enabled = true;
+    prefs.sep_blinking = true;
+    prefs.sep_color = WHITE;
+    prefs.sep_char = ':';
+    prefs.utc_time_offset = 7200;
+
+    ntp_client.setTimeOffset(prefs.utc_time_offset);
+    ntp_client.update();
+
     prefs_save();
 }
 
@@ -747,7 +746,7 @@ void handle_restart(void)
     server.stop();
 
     prefs_save();
-    non_volatile_prefs.end();
+    EEPROM.end();
     
     ESP.restart();
 }
