@@ -2,5 +2,27 @@
     "C_Cpp.intelliSenseEngine": "default",
     "cSpell.words": [
         "fupload"
-    ]
+    ],
+    "files.associations": {
+        "*.tt": "c",
+        "*.pde": "pde",
+        "*.h": "c",
+        "*.ll": "llvm",
+        "*.rasi": "rasi",
+        "*.yuck": "yuck",
+        "*.a": "gas",
+        "*.s": "gas",
+        "*.xpm": "plaintext",
+        "*.b": ".b",
+        "*.ui": "xml",
+        "*.y": "yacc",
+        "*.lrsproj": "json",
+        "*.lisp": "lisp",
+        "*.lrsmod": "json",
+        "array": "cpp",
+        "functional": "cpp",
+        "tuple": "cpp",
+        "type_traits": "cpp",
+        "utility": "cpp"
+    }
 }
