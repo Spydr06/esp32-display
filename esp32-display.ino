@@ -8,12 +8,15 @@
 #include <EEPROM.h>
 #include <algorithm>
 
+#include "WiFiClient.h"
+#include "esp_idf_version.h"
 #include "fonts/dogica4pt7b.h"
 #define FONT dogica4pt7b
 
 #include "version.h"
 
-#define STRINGIFY(arg) #arg
+#define QUOTE(arg) #arg
+#define QUOTE_EXPAND(arg) QUOTE(arg)
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define PANEL_RES_X 64
@@ -25,6 +28,7 @@
     #include <ESP32WebServer.h>
     #include <ESPmDNS.h>
     #include <SPIFFS.h>
+    #include <Update.h>
 
     #define PANEL_PIN_A 18
     #define PANEL_PIN_R1 23
@@ -64,6 +68,8 @@ typedef struct
     // weather settings
     bool w_enabled;
     char w_api_key[OPENWEATHERMAP_API_KEY_LENGTH + 1];
+    char w_coutry[3];
+    char w_city[41];
 } Prefs_T;
 
 #define EEPROM_SIZE (sizeof(Prefs_T))
@@ -93,6 +99,7 @@ void gif_draw_next_frame(void);
 
 void home_page(void);
 void handle_file_upload(void);
+void handle_ota_update(void);
 void handle_not_found(void);
 void handle_pref_update(void);
 void handle_restart(void);
@@ -102,6 +109,10 @@ Prefs_T prefs;
 
 WiFiUDP udp_socket;
 NTPClient ntp_client(udp_socket, "pool.ntp.org");
+
+WiFiClient wifi_client;
+
+const char *WEATHER_SERVER PROGMEM = "api.openweathermap.org";
 
 const uint16_t WHITE = display->color565(255, 255, 255);
 const uint16_t BLACK = display->color565(0, 0, 0);
@@ -172,18 +183,16 @@ void setup(void)
         ESP.restart();
     }
 
-   // if (!non_volatile_prefs.begin("esp32-display", false))
-   // {
-   //     log("error loading preferences", true);
-   //     delay(2000);
-   //     ESP.restart();
-   // }
-
     server.on("/", home_page);
     server.on("/fupload", HTTP_POST, [](){ server.send(200); }, handle_file_upload);
     server.on("/restart", handle_restart);
     server.on("/reset", handle_reset);
     server.on("/pref", HTTP_POST, handle_pref_update);
+    server.on("/update", HTTP_POST, [](){
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
+        ESP.restart();
+    }, handle_ota_update);
     server.onNotFound(handle_not_found);
 
     server.begin();
@@ -271,6 +280,8 @@ void prefs_reset(void)
     prefs.utc_time_offset = 7200;
     prefs.w_enabled = true;
     memset(prefs.w_api_key, '\0', sizeof(prefs.w_api_key));
+    memset(prefs.w_coutry, '\0', sizeof(prefs.w_coutry));
+    memset(prefs.w_city, '\0', sizeof(prefs.w_city));
 
     ntp_client.setTimeOffset(prefs.utc_time_offset);
     ntp_client.update();
@@ -315,9 +326,9 @@ void prefs_page(void)
 
     html_page += F(R"raw('/><br/><br/>
 <label for='c_pos'>Position:</label>
-<input type='number' id='c_pos' name='c_pos_x' min='0' max=')raw" STRINGIFY(PANEL_RES_X) "' value='");
+<input type='number' id='c_pos' name='c_pos_x' min='0' max=')raw" QUOTE(PANEL_RES_X) "' value='");
     html_page += prefs.c_pos_x;
-    html_page += F("'/><input type='number' id='c_pos' name='c_pos_y' min='0' max='" STRINGIFY(PANEL_RES_Y) "' value='");
+    html_page += F("'/><input type='number' id='c_pos' name='c_pos_y' min='0' max='" QUOTE(PANEL_RES_Y) "' value='");
     html_page += prefs.c_pos_y;
     html_page += F(R"raw('/><br/><br/>
 <label for='c_hour_col'>Hour Color:</label>
@@ -336,7 +347,7 @@ void prefs_page(void)
 
     html_page += F(R"raw('/><br/><br/>
 <label for='c_spacing'>Spacing:</label>
-<input type='number' id='c_spacing' name='c_spacing' min='0' max=')raw" STRINGIFY(UINT8_MAX) "' value='");
+<input type='number' id='c_spacing' name='c_spacing' min='0' max=')raw" QUOTE(UINT8_MAX) "' value='");
     html_page += prefs.c_spacing;
     html_page += F(R"raw('/><br/>
 <h4>Separator:</h4>
@@ -350,7 +361,7 @@ void prefs_page(void)
 
     html_page += F(R"raw(<input type='checkbox' checked id='sep_enabled' name='sep_enabled'/><br/><br/>
 <label for='sep_blink_interval'>Blink Interval: (in ms, `0` means off)</label>
-<input type='number' id='sep_blink_interval' name='sep_blink_interval' min='0' max=')raw" STRINGIFY(UINT16_MAX) "' value='");
+<input type='number' id='sep_blink_interval' name='sep_blink_interval' min='0' max=')raw" QUOTE(UINT16_MAX) "' value='");
     html_page += prefs.sep_blink_interval;
     html_page += F(R"raw('/><br/><br/>
 <label for='sep_color'>Color:</label>
@@ -379,10 +390,20 @@ end_clock_config:
     }
 
     html_page += F(R"raw(<input type='checkbox' id='w_enabled' name='w_enabled' checked/><br/><br/>
-<label for='e_api_key'><a href='https://openweathermap.org'>openweathermap.org</a> API Key</label>
-<input type='text' minlength='0' maxlength=')raw" STRINGIFY(OPENWEATHERMAP_API_KEY_LENGTH) "' value='");
+<label for='w_api_key'><a href='https://openweathermap.org'>openweathermap.org</a> API Key</label>
+<input type='text' minlength='0' maxlength=')raw" QUOTE(OPENWEATHERMAP_API_KEY_LENGTH) "' id='w_api_key' name='w_api_key' value='");
     html_page += prefs.w_api_key;
-    html_page += F("'/><br></br>");
+
+    html_page += F(R"raw('/><br/><br/>
+<label for='w_country'>2-Letter Country Code:</label>
+<input type='text' minlength='2' maxlength='2' id='w_country' name='w_country' value=')raw");
+    html_page += prefs.w_coutry;
+
+    html_page += F(R"raw('/><br/><br/>
+<label for='w_city'>City:</label>
+<input type='text' minlength='0' maxlength='40' id='w_city' name='w_city' value=')raw");
+    html_page += prefs.w_city;
+    html_page += F("'><br/><br/>");
 
 end_weather_config:
     html_page += F("<button type='submit'>Update Settings</button></form></br>");
@@ -424,6 +445,10 @@ void pref_update(String item, String value)
         prefs.w_enabled = true;
     else if(item == "w_api_key")
         memcpy(prefs.w_api_key, value.c_str(), MIN(value.length(), OPENWEATHERMAP_API_KEY_LENGTH));
+    else if(item == "w_country")
+        memcpy(prefs.w_coutry, value.c_str(), 2);
+    else if(item == "w_city")
+        memcpy(prefs.w_city, value.c_str(), sizeof(prefs.w_city) - sizeof(char));
     else
     {
         html_page += F("<label>Unknown setting \"");
@@ -646,6 +671,54 @@ void gif_draw_next_frame(void)
 }
 
 /*
+ * Weather
+ */
+
+/*
+bool start_json = false;
+
+inline void weather_make_request(void)
+{
+    wifi_client.stop();
+
+    if (!wifi_client.connect(WEATHER_SERVER, 80))
+    {
+        Serial.print("connection to ");
+        Serial.print(WEATHER_SERVER);
+        Serial.println(" failed");
+    }
+
+    wifi_client.printf(R"raw(GET /data/2.5/forecast/q=%s,%02s&APPID=%s&mode=json&units=metric&cnt=2 HTTP/1.1
+Host: %s
+User-Agent: ArduinoWiFi/1.1
+Connection: close
+
+)raw", prefs.w_city, prefs.w_coutry, prefs.w_api_key, WEATHER_SERVER);
+
+    uint64_t timeout = millis();
+    while (wifi_client.available() == 0)
+    {
+        if (millis() - timeout > 5000)
+        {
+            Serial.println(F(">>> Weather Client Timeout"));
+            client.stop();
+            return;
+        }
+    }
+
+    char c;
+    while (wifi_client.available())
+    {
+        c = client.read();
+    }
+}
+
+void query_weather(void)
+{
+
+}
+*/
+/*
  * Webserver
  */
 
@@ -684,31 +757,49 @@ inline void send_header(void)
 
 void home_page(void)
 {
-    static const auto page = F(R"raw(
+    send_header();
+
+    html_page += F(R"raw(
 <h1>ESP8266 Display Configuration</h1>
 <a href='/restart'><button>Restart</button></a>
 <a href='/reset'><button>Reset</button></a><br/>
+<h3>Firmware Information</h3>
+<table><tr><td>Version:</td><td>)raw" ESP32_DISPLAY_VERSION R"raw(</td></tr>
+<tr><td>Build Date:</td><td>)raw" ESP32_DISPLAY_BUILD_DATE R"raw(</td></tr>
+<tr><td>Build Time:</td><td>)raw" ESP32_DISPLAY_BUILD_TIME R"raw(</td></tr>
+<tr><td>Espressif Idf Version:</td><td>)raw");
+
+    html_page += esp_get_idf_version();
+
+    html_page += F(R"raw(</td></tr>
+<tr><td>Flash Size:</td><td>)raw");
+
+    html_page += ESP.getFlashChipSize();
+    html_page += F(R"raw( (bytes)</td></tr></table>)raw");
+
+    html_page += F(R"raw(<h3>Firmware Update</h3>
+<form action='/update' method='post' enctype='multipart/form-data'>
+<input type='file' name='update' id='update' value=''/>
+<button type='submit'>Upload New Firmware</button><br/></form>
 <h3>Select GIF</h3>
 <form action='/fupload' method='post' enctype='multipart/form-data'>
 <input type='file' name='fupload' id='fupload' value=''/>
-<button type='submit'>Upload GIF</button><br/>
-</form>)raw");
+<button type='submit'>Upload GIF</button><br/></form>)raw");
 
-    send_header();
-    html_page += page;
     prefs_page();
     html_page += HTML_PAGE_FOOTER;
     send_content();
     send_stop();
 }
 
-void report_could_not_create_file(const char *target)
+void report_file_upload_error(String& filename, const char* message)
 {
     send_header();
-    html_page += F("<h3>Error creating uploaded file. Make sure the file is not bigger than 3Mb and ends in `.gif`!</h3>");
-    html_page += F("<a href='/");
-    html_page += target;
-    html_page += F("'>[Back]</a><br/>");
+    html_page += F("<h3>Error Uploading ");
+    html_page += filename;
+    html_page += F(".</h3><label>");
+    html_page += message;
+    html_page += F("</label><a href='/'>[Back]</a><br/>");
     html_page += HTML_PAGE_FOOTER;
     send_content();
     send_stop();
@@ -741,7 +832,7 @@ void handle_file_upload(void)
     HTTPUpload &upload_file = server.upload();
     if (!upload_file.filename.endsWith(".gif"))
     {
-        report_could_not_create_file("upload");
+        report_file_upload_error(upload_file.filename, "Filename does not end in `.gif`");
         return;
     }
 
@@ -774,16 +865,70 @@ void handle_file_upload(void)
             html_page += upload_file.filename + "</h2>";
             html_page += F("<h2>File Size: ");
             html_page += upload_file.totalSize;
-            html_page += F("</h2><br/>");
+            html_page += F(" (bytes)</h2><br/>");
             html_page += F("<a href='/'>[Back]</a><br/>");
             html_page += HTML_PAGE_FOOTER;
             server.send(200, "text/html", html_page);
         }
         else
-            report_could_not_create_file("upload");
+            report_file_upload_error(upload_file.filename, "Error creating destination file");
         break;
     default:
-        report_could_not_create_file("upload");
+        report_file_upload_error(upload_file.filename, "Unknown file status");
+    }
+}
+
+void handle_ota_update(void)
+{
+    HTTPUpload& upload_file = server.upload();
+    if (!upload_file.filename.endsWith(".bin"))
+    {
+        report_file_upload_error(upload_file.filename, "Filename does not end in `.bin`");
+        return;
+    }
+
+    switch(upload_file.status)
+    {
+    case UPLOAD_FILE_START:
+        Serial.printf("Update: %s\n", upload_file.filename.c_str());
+        if(!Update.begin(UPDATE_SIZE_UNKNOWN))
+        {
+            Update.printError(Serial);
+            report_file_upload_error(upload_file.filename, Update.errorString());
+        }
+
+        break;
+    case UPLOAD_FILE_WRITE:
+        if(Update.write(upload_file.buf, upload_file.currentSize) != upload_file.currentSize)
+        {
+            Update.printError(Serial);
+            report_file_upload_error(upload_file.filename, Update.errorString());
+        }
+        break;
+    case UPLOAD_FILE_END:
+        if(Update.end(true))
+        {
+            Serial.printf("Update Success: %u\nRebooting...\n", upload_file.totalSize);
+
+            html_page = "";
+            html_page += HTML_PAGE_HEADER;
+            html_page += F("<h3>Update was successfully uploaded</h3>");
+            html_page += F("<h2>Update Size: ");
+            html_page += upload_file.totalSize;
+            html_page += F(" (bytes)</h2><label>Please wait a few seconds until the display has restarted. Then go </label>");
+            html_page += F("<a href='/'>[Back]</a><label>.</label><br/>");
+            html_page += HTML_PAGE_FOOTER;
+            server.send(200, "text/html", html_page);
+
+            delay(2000);
+        }
+        else
+        {
+            Update.printError(Serial);
+            report_file_upload_error(upload_file.filename, Update.errorString());
+        }
+    default:
+        break;
     }
 }
 
