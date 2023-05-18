@@ -1,4 +1,4 @@
-# esp32-display
+<h1><p style='text-align: center; font-family: monospace;'>ESP32-Display</p></h1>
 
 <h3><p style='text-align: center; font-family: monospace;'>>> A GIF-playing smart-display for ESP32 microcontrollers using a 32×64 HUB75 dot matrix display <<</p></h3>
 
