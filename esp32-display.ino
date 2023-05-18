@@ -14,6 +14,7 @@
 #define FONT dogica4pt7b
 
 #include "version.h"
+#include "config.h"
 
 #define QUOTE(arg) #arg
 #define QUOTE_EXPAND(arg) QUOTE(arg)
@@ -122,10 +123,6 @@ const uint16_t BLACK = display->color565(0, 0, 0);
 const uint16_t ERROR = display->color565(255, 100, 100);
 const uint16_t WARN  = display->color565(246, 211, 45);
 const uint16_t CRITICAL = display->color565(255,130,67);
-
-const char *WIFI_SSID = "Keller";
-const char *WIFI_PASSWD = "?Es1tlubHiJb!";
-const char *SERVER_NAME = "esp-display"; // access http://esp-display in browser
 
 const char *HTML_PAGE_HEADER PROGMEM = "<!DOCTYPE html><html><head><title>ESP Display</title></head><body>";
 const char *HTML_PAGE_FOOTER PROGMEM = "</body></html>";
