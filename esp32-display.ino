@@ -70,6 +70,9 @@ typedef struct
     char w_api_key[OPENWEATHERMAP_API_KEY_LENGTH + 1];
     char w_coutry[3];
     char w_city[41];
+
+    // general settings
+    uint8_t brightness;
 } Prefs_T;
 
 #define EEPROM_SIZE (sizeof(Prefs_T))
@@ -250,7 +253,7 @@ void display_init(void)
 
     display = new MatrixPanel_I2S_DMA(mx_config);
     display->begin();
-    display->setBrightness(255);
+    display->setBrightness(prefs.brightness);
     display->clearScreen();
     display->setLatBlanking(2);
     display->setFont(&FONT);
@@ -288,6 +291,7 @@ void prefs_reset(void)
     memset(prefs.w_api_key, '\0', sizeof(prefs.w_api_key));
     memset(prefs.w_coutry, '\0', sizeof(prefs.w_coutry));
     memset(prefs.w_city, '\0', sizeof(prefs.w_city));
+    prefs.brightness = 255;
 
     ntp_client.setTimeOffset(prefs.utc_time_offset);
     ntp_client.update();
@@ -314,8 +318,15 @@ uint16_t str_to_color565(const char* str)
 
 void prefs_page(void)
 {
-    html_page += F(R"raw(<h3>Clock Configuration</h3>
+    html_page += F(R"raw(<h3>General</h3>
 <form action='/pref' method='post' enctype='multipart/form-data'>
+<label for='brightness'>Brightness:</label>
+<input type='number' id='brightness' name='brightness' min='0' max='255' value=')raw");
+
+    html_page += prefs.brightness;
+
+    html_page += F(R"raw('/><br/>
+<h3>Clock Configuration</h3>
 <label for='show-clock'>Show Clock:</label>)raw");
 
     if (!prefs.c_enabled)
@@ -421,7 +432,9 @@ void pref_update(String item, String value)
     Serial.print(": ");
     Serial.println(value);
 
-    if(item == "show-clock")
+    if(item == "brightness")
+        display->setBrightness(prefs.brightness = (uint8_t) value.toInt());
+    else if(item == "show-clock")
         prefs.c_enabled = true;
     else if(item == "utc-time-offset")
     {
@@ -430,9 +443,9 @@ void pref_update(String item, String value)
         ntp_client.update();
     }
     else if(item == "c_pos_x")
-        prefs.c_pos_x = value.toInt();
+        prefs.c_pos_x = (uint8_t) value.toInt();
     else if(item == "c_pos_y")
-        prefs.c_pos_y = value.toInt();
+        prefs.c_pos_y = (uint8_t) value.toInt();
     else if(item == "c_hour_col")
         prefs.c_hour_col = str_to_color565(value.c_str());
     else if(item == "c_minute_col")
@@ -446,7 +459,7 @@ void pref_update(String item, String value)
     else if(item == "sep_char")
         prefs.sep_char = value.charAt(0);
     else if(item == "sep_blink_interval")
-        prefs.sep_blink_interval = value.toInt();
+        prefs.sep_blink_interval = (uint16_t) value.toInt();
     else if(item == "w_enabled")
         prefs.w_enabled = true;
     else if(item == "w_api_key")
